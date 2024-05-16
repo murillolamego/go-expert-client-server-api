@@ -18,5 +18,8 @@
 go.work
 go.work.sum
 
-# Binary
+# Default Binary
 go-expert-client-server-api
+
+# Sqlite DB
+usdbrl.db

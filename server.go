@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"io"
 	"net/http"
 	"time"
+
+	_ "github.com/mattn/go-sqlite3"
 )
 
 type ExchangeRate struct {
@@ -24,27 +27,35 @@ type ExchangeRate struct {
 	} `json:"USDBRL"`
 }
 
-type Response struct {
+type ApiResponse struct {
 	value ExchangeRate
 	err   error
 }
 
+type DbResponse struct {
+	err error
+}
+
 func Server() {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /cotacao", getCotacao)
+	mux.HandleFunc("GET /cotacao", cotacaoHandler)
 	http.ListenAndServe(":8080", mux)
 }
 
-func getCotacao(w http.ResponseWriter, r *http.Request) {
+func cotacaoHandler(w http.ResponseWriter, r *http.Request) {
 	apiTimeoutMili := 200
-	apiCtx, cancel := context.WithTimeout(context.Background(), time.Duration(apiTimeoutMili)*time.Millisecond)
-	defer cancel()
+	apiCtx, apiCancel := context.WithTimeout(context.Background(), time.Duration(apiTimeoutMili)*time.Millisecond)
+	defer apiCancel()
+	respApiCh := make(chan ApiResponse)
 
-	respApiCh := make(chan Response)
+	dbTimeoutMili := 10
+	dbCtx, dbCancel := context.WithTimeout(context.Background(), time.Duration(dbTimeoutMili)*time.Millisecond)
+	defer dbCancel()
+	respDbCh := make(chan DbResponse)
 
 	go func() {
 		val, err := getLatestExchangeRateUSDBRL(apiCtx)
-		respApiCh <- Response{
+		respApiCh <- ApiResponse{
 			value: val,
 			err:   err,
 		}
@@ -53,38 +64,90 @@ func getCotacao(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case <-apiCtx.Done():
+			println("Err: Fetching data from external API took too long")
 			w.WriteHeader(http.StatusRequestTimeout)
 			return
-		case resp := <-respApiCh:
-			if resp.err != nil {
+		case apiResp := <-respApiCh:
+			if apiResp.err != nil {
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
-			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(resp.value.USDBRL.Bid)
+
+			go func() {
+				err := persistLatestExchangeRateUSDBRL(dbCtx, apiResp.value)
+				respDbCh <- DbResponse{
+					err: err,
+				}
+			}()
+
+			for {
+				select {
+				case <-dbCtx.Done():
+					println("Err: Writing to database took too long")
+					w.WriteHeader(http.StatusRequestTimeout)
+					return
+				case dbResp := <-respDbCh:
+					if dbResp.err != nil {
+						w.WriteHeader(http.StatusInternalServerError)
+						return
+					}
+					w.WriteHeader(http.StatusOK)
+					json.NewEncoder(w).Encode(apiResp.value.USDBRL.Bid)
+					return
+				}
+			}
 		}
 	}
 }
 
 func getLatestExchangeRateUSDBRL(ctx context.Context) (ExchangeRate, error) {
 	apiURL := "https://economia.awesomeapi.com.br/json/last/USD-BRL"
+	var ex ExchangeRate
 	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
 	if err != nil {
-		return ExchangeRate{}, err
+		return ex, err
 	}
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return ExchangeRate{}, err
+		return ex, err
 	}
 	defer res.Body.Close()
 	body, err := io.ReadAll(res.Body)
 	if err != nil {
-		return ExchangeRate{}, err
+		return ex, err
 	}
-	var ex ExchangeRate
 	err = json.Unmarshal(body, &ex)
 	if err != nil {
-		return ExchangeRate{}, err
+		return ex, err
 	}
 	return ex, nil
+}
+
+func persistLatestExchangeRateUSDBRL(ctx context.Context, ex ExchangeRate) error {
+	c := ex.USDBRL
+
+	db, err := sql.Open("sqlite3", "usdbrl.db")
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	_, err = db.ExecContext(ctx, "INSERT INTO usdbrl VALUES(NULL,?,?,?,?,?,?,?,?,?,?,?);",
+		c.Code,
+		c.Codein,
+		c.Name,
+		c.High,
+		c.Low,
+		c.VarBid,
+		c.PctChange,
+		c.Bid,
+		c.Ask,
+		c.Timestamp,
+		c.CreateDate)
+	if err != nil {
+		println(err.Error())
+		return err
+	}
+
+	return nil
 }
