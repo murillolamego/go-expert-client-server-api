@@ -18,8 +18,12 @@
 go.work
 go.work.sum
 
-# Default Binary
+# Default Binaries
 go-expert-client-server-api
+client/client
+server/server
 
 # Sqlite DB
 usdbrl.db
+
+client/cotacao.txt

@@ -13,17 +13,17 @@ import (
 
 type ExchangeRate struct {
 	USDBRL struct {
-		Code       string `json:"code"`
-		Codein     string `json:"codein"`
-		Name       string `json:"name"`
-		High       string `json:"high"`
-		Low        string `json:"low"`
-		VarBid     string `json:"varBid"`
-		PctChange  string `json:"pctChange"`
+		code       string
+		codein     string
+		name       string
+		high       string
+		low        string
+		varBid     string
+		pctChange  string
 		Bid        string `json:"bid"`
-		Ask        string `json:"ask"`
-		Timestamp  string `json:"timestamp"`
-		CreateDate string `json:"create_date"`
+		ask        string
+		timestamp  string
+		createDate string
 	} `json:"USDBRL"`
 }
 
@@ -36,7 +36,35 @@ type DbResponse struct {
 	err error
 }
 
-func Server() {
+func main() {
+
+	const create string = `
+	CREATE TABLE IF NOT EXISTS usdbrl (
+	id INTEGER NOT NULL PRIMARY KEY,
+	code TEXT,
+	codein TEXT,
+	name TEXT,
+	high TEXT,
+	low TEXT,
+	var_bid TEXT,
+	pct_change TEXT,
+	bid TEXT,
+	ask TEXT,
+	timestamp TEXT,
+	create_date TEXT
+	);`
+
+	db, err := sql.Open("sqlite3", "usdbrl.db")
+	if err != nil {
+		panic(err)
+	}
+	defer db.Close()
+
+	_, err = db.Exec(create)
+	if err != nil {
+		panic(err)
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /cotacao", cotacaoHandler)
 	http.ListenAndServe(":8080", mux)
@@ -92,7 +120,7 @@ func cotacaoHandler(w http.ResponseWriter, r *http.Request) {
 						return
 					}
 					w.WriteHeader(http.StatusOK)
-					json.NewEncoder(w).Encode(apiResp.value.USDBRL.Bid)
+					json.NewEncoder(w).Encode(apiResp.value.USDBRL)
 					return
 				}
 			}
@@ -107,6 +135,7 @@ func getLatestExchangeRateUSDBRL(ctx context.Context) (ExchangeRate, error) {
 	if err != nil {
 		return ex, err
 	}
+
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return ex, err
@@ -133,17 +162,17 @@ func persistLatestExchangeRateUSDBRL(ctx context.Context, ex ExchangeRate) error
 	defer db.Close()
 
 	_, err = db.ExecContext(ctx, "INSERT INTO usdbrl VALUES(NULL,?,?,?,?,?,?,?,?,?,?,?);",
-		c.Code,
-		c.Codein,
-		c.Name,
-		c.High,
-		c.Low,
-		c.VarBid,
-		c.PctChange,
+		c.code,
+		c.codein,
+		c.name,
+		c.high,
+		c.low,
+		c.varBid,
+		c.pctChange,
 		c.Bid,
-		c.Ask,
-		c.Timestamp,
-		c.CreateDate)
+		c.ask,
+		c.timestamp,
+		c.createDate)
 	if err != nil {
 		println(err.Error())
 		return err
